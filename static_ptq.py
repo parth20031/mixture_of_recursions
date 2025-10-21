@@ -154,8 +154,8 @@ def load_model_and_tokenizer(checkpoint_path: str, device: str, project_root: Pa
 def quantize_model(model: torch.nn.Module, tokenizer, device: str, checkpoint_path: str) -> torch.nn.Module:
     """
     Quantizes the model using static post-training quantization.
-    This version wraps each individual Linear layer in Quant/DeQuant stubs
-    AND correctly sets the qconfig on the wrapper to ensure stubs are prepared.
+    This version fixes the wrapping logic to correctly handle top-level
+    modules (like lm_head) in addition to nested modules.
     """
     print("Starting static model quantization...")
     model.eval()
@@ -169,6 +169,7 @@ def quantize_model(model: torch.nn.Module, tokenizer, device: str, checkpoint_pa
     modules_to_wrap = []
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Linear):
+            # Add all linear layers, including lm_head
             modules_to_wrap.append((name, module))
         
         if isinstance(module, torch.nn.Embedding):
@@ -191,19 +192,27 @@ def quantize_model(model: torch.nn.Module, tokenizer, device: str, checkpoint_pa
                 torch.quantization.DeQuantStub()
             )
             
-            # *** THE CRITICAL FIX ***
-            # Set the qconfig on the parent Sequential wrapper to ensure
-            # 'prepare' propagates it to the QuantStub and DeQuantStub.
+            # Set the qconfig on the parent Sequential wrapper
             wrapped_module.qconfig = qconfig
             
-            # Use setattr to replace the original module
-            parent_name, child_name = name.rsplit('.', 1)
-            parent_module = model.get_submodule(parent_name)
+            # --- *** THE CRITICAL FIX *** ---
+            # Correctly find the parent module and child name
+            if '.' in name:
+                # Nested module (e.g., "model.layers.0.q_proj")
+                parent_name, child_name = name.rsplit('.', 1)
+                parent_module = model.get_submodule(parent_name)
+            else:
+                # Top-level module (e.g., "lm_head")
+                parent_module = model
+                child_name = name
+            
+            # Replace the original module with the wrapped one
             setattr(parent_module, child_name, wrapped_module)
-            print(f"Wrapped {name} with Quant/DeQuant stubs.")
+            print(f"Successfully wrapped {name} with Quant/DeQuant stubs.")
         
         except Exception as e:
-            print(f"Failed to wrap {name}: {e}. This layer might not be quantized.")
+            # This is important for debugging
+            print(f"CRITICAL: Failed to wrap {name}: {e}. This layer might not be quantized.")
 
     # --- 2. Prepare ---
     model_prepared = torch.quantization.prepare(model, inplace=True)
@@ -227,12 +236,11 @@ def quantize_model(model: torch.nn.Module, tokenizer, device: str, checkpoint_pa
     print("Calibration complete.")
 
     # --- 4. Convert ---
-    # This will now correctly fuse the Sequential(Quant, Linear, DeQuant)
-    # blocks into single operators that accept FLOAT and return FLOAT.
+    # This will now correctly fuse all wrapped layers
     model_quantized = torch.quantization.convert(model_prepared)
     
     print("Static model quantization complete.")
-    # print("The quantized model is+++++++++++++++++++++++++++++++", model_quantized)
+    print("The quantized model is+++++++++++++++++++++++++++++++", model_quantized)
     
     # --- 5. Save ---
     quantized_model_path = checkpoint_path + "_quantized"
