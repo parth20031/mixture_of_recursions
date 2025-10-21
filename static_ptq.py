@@ -242,14 +242,20 @@ def quantize_model(model: torch.nn.Module, tokenizer, device: str, checkpoint_pa
     print("Static model quantization complete.")
     print("The quantized model is+++++++++++++++++++++++++++++++", model_quantized)
     
-    # --- 5. Save ---
+    # # --- 5. Save ---
+    # quantized_model_path = checkpoint_path + "_quantized"
+    # os.makedirs(quantized_model_path, exist_ok=True)
+    
+    # torch.save(model_quantized.state_dict(), os.path.join(quantized_model_path, "pytorch_model.bin"))
+    # model_quantized.config.save_pretrained(quantized_model_path)
+    
+    # print(f"Quantized model saved to: {quantized_model_path}")
+
     quantized_model_path = checkpoint_path + "_quantized"
-    os.makedirs(quantized_model_path, exist_ok=True)
-    
-    torch.save(model_quantized.state_dict(), os.path.join(quantized_model_path, "pytorch_model.bin"))
-    model_quantized.config.save_pretrained(quantized_model_path)
-    
-    print(f"Quantized model saved to: {quantized_model_path}")
+    full_model_path = os.path.join(quantized_model_path, "quantized_model.pt")
+    torch.save(model_quantized, full_model_path)
+
+    print(f"Full quantized model saved to: {full_model_path}")
     
     return model_quantized
 
